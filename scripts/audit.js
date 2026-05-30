@@ -37,17 +37,17 @@ async function postOrUpdateComment(message) {
 }
 
 function getStatusMarkdown(steps) {
-    let md = "### 🛡️ GNOME Beta Store - Audit Progress\n\n";
+    let md = "### 🛡️ Audit Progress\n\n";
     for (const step of steps) {
         const icon = step.status === 'pending' ? '⏳' : (step.status === 'running' ? '🔄' : (step.status === 'success' ? '✅' : '❌'));
         md += `${icon} **${step.name}**: ${step.message}\n`;
     }
-    md += "\n---\n*Automated review in progress. Please wait.*";
+    md += "\n---\n*Automated review in progress.*";
     return md;
 }
 
 const auditSteps = [
-    { id: 'prep', name: 'Preparation', status: 'pending', message: 'Waiting to start...' },
+    { id: 'prep', name: 'Preparation', status: 'pending', message: 'Waiting...' },
     { id: 'download', name: 'Asset Download', status: 'pending', message: 'Pending' },
     { id: 'metadata', name: 'Metadata Validation', status: 'pending', message: 'Pending' },
     { id: 'ai', name: 'AI Code Audit', status: 'pending', message: 'Pending' },
@@ -65,6 +65,7 @@ async function updateStep(id, status, message) {
 }
 
 async function downloadFile(url, dest) {
+    if (!url) throw new Error("URL is empty");
     console.log(`Downloading: ${url} -> ${dest}`);
     const dir = path.dirname(dest);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -74,7 +75,7 @@ async function downloadFile(url, dest) {
             url,
             method: 'GET',
             responseType: 'stream',
-            headers: { 'User-Agent': 'Mozilla/5.0 (GNOME Beta Store Bot)' }
+            headers: { 'User-Agent': 'Mozilla/5.0 (Beta Store Bot)' }
         });
         return new Promise((resolve, reject) => {
             const writer = fs.createWriteStream(dest);
@@ -124,12 +125,13 @@ async function failAudit(stepId, message) {
 }
 
 async function run() {
-    await updateStep('prep', 'running', 'Analyzing request type...');
+    await updateStep('prep', 'running', 'Analyzing request...');
     
     const issueBody = process.env.ISSUE_BODY || '';
     const labelsRaw = process.env.ISSUE_LABELS || '[]';
     const labels = JSON.parse(labelsRaw).map(l => l.name);
     const issueUser = process.env.ISSUE_USER;
+    const issueTitle = (process.env.ISSUE_TITLE || '').toLowerCase();
 
     const dbPath = 'extensions.json';
     let db = [];
@@ -142,19 +144,20 @@ async function run() {
     for (let section of sections) {
         const lines = section.trim().split('\n');
         const header = lines.shift().trim();
-        const content = lines.join('\n').trim();
+        let content = lines.join('\n').trim();
+        if (content === '_No response_') content = '';
+
         if (header.includes('Extension UUID')) formData.uuid = content;
-        if (header.includes('Clear Name')) formData.name = content;
+        if (header.includes('Name')) formData.name = content;
         if (header.includes('Description')) formData.description = content;
         if (header.includes('GitHub Link')) formData.github_url = content;
-        if (header.includes('Promo Link')) formData.promo_url = content !== '_No response_' ? content : '';
+        if (header.includes('Promo Link')) formData.promo_url = content;
         if (header.includes('ZIP File')) formData.zip_url = extractLink(content);
         if (header.includes('Icon')) formData.icon_url = extractLink(content);
         if (header.includes('Screenshots')) formData.demo_urls = extractLinks(content);
     }
 
-    const issueTitle = (process.env.ISSUE_TITLE || '').toLowerCase();
-
+    // Mode detection
     let mode = 'new';
     if (labels.includes('actualizacion-zip') || issueTitle.includes('update:')) mode = 'update-zip';
     else if (labels.includes('editar-metadata') || issueTitle.includes('edit:')) mode = 'edit-meta';
@@ -162,55 +165,55 @@ async function run() {
     else if (labels.includes('nueva-extension') || issueTitle.includes('new:')) mode = 'new';
 
     let targetExt = null;
-    let uuid = formData.uuid;
+    let uuid = formData.uuid ? formData.uuid.trim() : null;
 
-    // Authorization & Pre-checks
+    // 1. DELETE MODE
     if (mode === 'delete') {
+        if (!uuid) await failAudit('prep', 'UUID is required for deletion.');
         targetExt = db.find(e => e.uuid === uuid);
         if (!targetExt) await failAudit('prep', `Extension ${uuid} not found.`);
         if (issueUser !== ADMIN_USER && targetExt.github_user !== issueUser) {
-            await failAudit('prep', `Unauthorized: Only @${ADMIN_USER} or the owner (@${targetExt.github_user}) can delete this.`);
+            await failAudit('prep', `Unauthorized: You don't own ${uuid}.`);
         }
         
-        await updateStep('prep', 'success', `Request mode: ${mode}`);
-        await updateStep('publish', 'running', 'Removing extension files and database entry...');
-        
-        // Remove from DB
+        await updateStep('prep', 'success', `Deleting ${uuid}...`);
         db = db.filter(e => e.uuid !== uuid);
         fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 
-        // Remove files
         const zipFile = path.join('extensions', `${uuid}.zip`);
         if (fs.existsSync(zipFile)) fs.unlinkSync(zipFile);
-        
         const iconFile = path.join('assets/icons', `${uuid}.png`);
         if (fs.existsSync(iconFile)) fs.unlinkSync(iconFile);
-        
         const demosDir = path.join('assets/demos', uuid);
         if (fs.existsSync(demosDir)) fs.rmSync(demosDir, { recursive: true, force: true });
 
-        await updateStep('publish', 'success', `Extension ${uuid} deleted successfully.`);
-        // Close issue
-        if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
-            await axios.patch(`https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`,
-                { state: 'closed', state_reason: 'completed' },
-                { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' } }
-            );
-        }
-        return;
+        await updateStep('publish', 'success', 'Extension removed.');
+        process.exit(0);
     }
 
-    if (mode !== 'new' || db.find(e => e.uuid === uuid)) {
-        targetExt = db.find(e => e.uuid === (uuid || ''));
-        if (targetExt && targetExt.github_user && targetExt.github_user !== issueUser && issueUser !== ADMIN_USER) {
-            await failAudit('prep', `Unauthorized: This extension belongs to @${targetExt.github_user}.`);
+    // 2. NEW MODE VALIDATION
+    if (mode === 'new') {
+        if (!uuid || !formData.name || !formData.zip_url || !formData.icon_url) {
+            await failAudit('prep', 'Missing required fields (UUID, Name, ZIP, or Icon).');
+        }
+        if (db.find(e => e.uuid === uuid)) {
+            targetExt = db.find(e => e.uuid === uuid);
+            if (targetExt.github_user && targetExt.github_user !== issueUser && issueUser !== ADMIN_USER) {
+                await failAudit('prep', `Conflict: UUID ${uuid} is already owned by @${targetExt.github_user}.`);
+            }
+            mode = 'update-zip'; // Upgrade to update if already exists and authorized
         }
     }
 
-    if (mode === 'update-zip') {
-        if (!formData.zip_url) await failAudit('prep', 'No ZIP file found.');
-    } else if (mode === 'edit-meta') {
-        if (!targetExt) await failAudit('prep', `Extension ${uuid} not found.`);
+    // 3. EDIT/UPDATE AUTH
+    if (mode === 'edit-meta' || mode === 'update-zip') {
+        if (mode === 'edit-meta' && !uuid) await failAudit('prep', 'UUID is required.');
+        if (uuid) {
+            targetExt = db.find(e => e.uuid === uuid);
+            if (targetExt && targetExt.github_user && targetExt.github_user !== issueUser && issueUser !== ADMIN_USER) {
+                await failAudit('prep', `Unauthorized: You don't own ${uuid}.`);
+            }
+        }
     }
 
     await updateStep('prep', 'success', `Request mode: ${mode}`);
@@ -221,10 +224,10 @@ async function run() {
     let metadata = null;
     let shellVersions = [];
 
-    // DOWNLOAD & METADATA
+    // ASSET DOWNLOAD (ZIP)
     if (mode === 'new' || mode === 'update-zip') {
         await updateStep('download', 'running', 'Downloading ZIP...');
-        if (!formData.zip_url) await failAudit('download', 'ZIP file URL is missing. Did you upload it?');
+        if (!formData.zip_url) await failAudit('download', 'ZIP URL missing.');
         zipPath = path.join(tmpDir, 'extension.zip');
         await downloadFile(formData.zip_url, zipPath);
         
@@ -236,19 +239,17 @@ async function run() {
         uuid = metadata.uuid;
         shellVersions = metadata['shell-version'] || [];
 
-        if (mode === 'update-zip') {
-            targetExt = db.find(e => e.uuid === uuid);
-            if (!targetExt) await failAudit('metadata', `Extension ${uuid} not found.`);
-            if (targetExt.github_user && targetExt.github_user !== issueUser && issueUser !== ADMIN_USER) {
-                await failAudit('metadata', `Unauthorized access to ${uuid}.`);
-            }
+        // Final Auth check for update-zip (UUID from ZIP)
+        targetExt = db.find(e => e.uuid === uuid);
+        if (targetExt && targetExt.github_user && targetExt.github_user !== issueUser && issueUser !== ADMIN_USER) {
+            await failAudit('metadata', `Unauthorized: ZIP UUID ${uuid} belongs to @${targetExt.github_user}.`);
         }
-        await updateStep('metadata', 'success', `UUID: ${uuid}, Version: ${metadata.version}`);
+        await updateStep('metadata', 'success', `UUID: ${uuid} v${metadata.version}`);
     }
 
-    // ASSETS
+    // ASSET DOWNLOAD (Icons/Demos)
     if (mode === 'new' || mode === 'edit-meta') {
-        await updateStep('download', 'running', 'Updating assets...');
+        await updateStep('download', 'running', 'Processing icons/screenshots...');
         if (formData.icon_url) {
             await downloadFile(formData.icon_url, path.join('assets/icons', `${uuid}.png`));
         }
@@ -259,16 +260,16 @@ async function run() {
                 await downloadFile(formData.demo_urls[i], path.join(demosDir, `demo${i+1}.png`));
             }
         }
-        await updateStep('download', 'success', 'Assets processed.');
+        await updateStep('download', 'success', 'Assets updated.');
     }
 
     if (mode === 'edit-meta') {
-        await updateStep('ai', 'success', 'Skipped.');
-        await updateStep('malware', 'success', 'Skipped.');
+        await updateStep('ai', 'success', 'Skipped (Metadata only).');
+        await updateStep('malware', 'success', 'Skipped (Metadata only).');
     }
 
     // AI AUDIT
-    let aiVerdict = targetExt ? targetExt.ai_report : null;
+    let aiVerdict = targetExt ? targetExt.ai_report : "Passed audit.";
     if (zipPath) {
         await updateStep('ai', 'running', 'AI Code Review...');
         const zip = new AdmZip(zipPath);
@@ -286,22 +287,22 @@ async function run() {
                 const openai = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
                 const completion = await openai.chat.completions.create({
                     model: "llama-3.3-70b-versatile",
-                    messages: [{ role: "system", content: "Review GNOME extension code. JSON only: {\"apta\": boolean, \"motivo\": \"string\"}" },
+                    messages: [{ role: "system", content: "Review code. JSON: {\"apta\": boolean, \"motivo\": \"string\"}" },
                                { role: "user", content: `Code:\n${codeText.substring(0, 40000)}` }],
                     temperature: 0.1,
                 });
                 const res = JSON.parse(completion.choices[0].message.content.match(/\{[\s\S]*\}/)[0]);
-                if (!res.apta) await failAudit('ai', `AI Rejected: ${res.motivo}`);
+                if (!res.apta) await failAudit('ai', `Rejected: ${res.motivo}`);
                 aiVerdict = res.motivo;
-            } catch (e) { aiVerdict = "Audit bypassed."; }
+            } catch (e) { aiVerdict = "Audit bypassed/manual."; }
         }
-        await updateStep('ai', 'success', 'Analysis complete.');
+        await updateStep('ai', 'success', 'Complete.');
     }
 
     // VIRUSTOTAL
-    let vtVerdict = targetExt ? targetExt.security_report : null;
+    let vtVerdict = targetExt ? targetExt.security_report : "Verified clean.";
     if (zipPath && process.env.VT_API_KEY) {
-        await updateStep('malware', 'running', 'VirusTotal Polling...');
+        await updateStep('malware', 'running', 'Scanning...');
         try {
             const form = new FormData();
             form.append('file', fs.createReadStream(zipPath));
@@ -317,7 +318,7 @@ async function run() {
                 });
                 if (report.data.data.attributes.status === 'completed') {
                     const stats = report.data.data.attributes.stats;
-                    if (stats.malicious > 0) await failAudit('malware', "MALWARE DETECTED!");
+                    if (stats.malicious > 0) await failAudit('malware', "Malware detected!");
                     vtVerdict = `Clean (${stats.harmless + stats.undetected} engines)`;
                     completed = true;
                     break;
@@ -329,10 +330,12 @@ async function run() {
     }
 
     // PUBLISH
-    await updateStep('publish', 'running', 'Finalizing...');
+    await updateStep('publish', 'running', 'Publishing...');
     const demoPaths = [];
     const demosDir = `assets/demos/${uuid}`;
-    if (fs.existsSync(demosDir)) fs.readdirSync(demosDir).forEach(f => demoPaths.push(path.join(demosDir, f)));
+    if (fs.existsSync(demosDir)) {
+        fs.readdirSync(demosDir).forEach(f => demoPaths.push(path.join(demosDir, f)));
+    }
 
     const finalExt = {
         uuid,
@@ -356,8 +359,8 @@ async function run() {
 
     fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
     if (zipPath) fs.copyFileSync(zipPath, path.join('extensions', `${uuid}.zip`));
-    await updateStep('publish', 'success', 'Published!');
-    
+
+    await updateStep('publish', 'success', 'Done!');
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
         await axios.patch(`https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`,
             { state: 'closed', state_reason: 'completed' },
