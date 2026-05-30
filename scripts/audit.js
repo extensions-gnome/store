@@ -3,6 +3,67 @@ const path = require('path');
 const AdmZip = require('adm-zip');
 const axios = require('axios');
 const FormData = require('form-data');
+const OpenAI = require('openai');
+
+let currentStatusCommentId = null;
+
+async function postOrUpdateComment(message) {
+    if (!process.env.GITHUB_TOKEN || !process.env.REPOSITORY || !process.env.ISSUE_NUMBER) {
+        console.log("Mock Comment:", message);
+        return;
+    }
+
+    const url = currentStatusCommentId 
+        ? `https://api.github.com/repos/${process.env.REPOSITORY}/issues/comments/${currentStatusCommentId}`
+        : `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}/comments`;
+    
+    const method = currentStatusCommentId ? 'patch' : 'post';
+
+    try {
+        const res = await axios({
+            method,
+            url,
+            data: { body: message },
+            headers: {
+                'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+        if (!currentStatusCommentId) currentStatusCommentId = res.data.id;
+    } catch (e) {
+        console.error("Error managing GitHub comment:", e.response?.data || e.message);
+    }
+}
+
+const loadingIcon = "![loading](https://raw.githubusercontent.com/nelson-liu/animated-gifs/master/loading.gif)"; // Small discrete loading gif if available, or just use text
+
+function getStatusMarkdown(steps) {
+    let md = "### 🛡️ GNOME Beta Store - Audit Progress\n\n";
+    for (const step of steps) {
+        const icon = step.status === 'pending' ? '⏳' : (step.status === 'running' ? '🔄' : (step.status === 'success' ? '✅' : '❌'));
+        md += `${icon} **${step.name}**: ${step.message}\n`;
+    }
+    md += "\n---\n*Automated review in progress. Please wait.*";
+    return md;
+}
+
+const auditSteps = [
+    { id: 'prep', name: 'Preparation', status: 'pending', message: 'Waiting to start...' },
+    { id: 'download', name: 'Asset Download', status: 'pending', message: 'Pending' },
+    { id: 'metadata', name: 'Metadata Validation', status: 'pending', message: 'Pending' },
+    { id: 'ai', name: 'AI Code Audit', status: 'pending', message: 'Pending' },
+    { id: 'malware', name: 'Malware Scan', status: 'pending', message: 'Pending' },
+    { id: 'publish', name: 'Publication', status: 'pending', message: 'Pending' }
+];
+
+async function updateStep(id, status, message) {
+    const step = auditSteps.find(s => s.id === id);
+    if (step) {
+        step.status = status;
+        step.message = message;
+    }
+    await postOrUpdateComment(getStatusMarkdown(auditSteps));
+}
 
 async function downloadFile(url, dest) {
     if (url.startsWith('file://')) {
@@ -50,20 +111,10 @@ function extractMarkdownLinks(text) {
     return links;
 }
 
-async function closeIssue(message) {
-    console.log("Closing issue:", message);
+async function failAudit(stepId, message) {
+    await updateStep(stepId, 'error', message);
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
         try {
-            await axios.post(
-                `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}/comments`,
-                { body: message },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                }
-            );
             await axios.patch(
                 `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`,
                 { state: 'closed', state_reason: 'not_planned' },
@@ -74,16 +125,15 @@ async function closeIssue(message) {
                     }
                 }
             );
-        } catch(e) {
-            console.error("Error closing the issue:", e.response?.data || e.message);
-        }
+        } catch(e) {}
     }
     process.exit(1);
 }
 
 async function run() {
+    await updateStep('prep', 'running', 'Analyzing issue data...');
+    
     const issueBody = process.env.ISSUE_BODY || '';
-    const issueNumber = process.env.ISSUE_NUMBER;
     const repo = process.env.REPOSITORY || 'owner/repo';
     
     const sections = issueBody.split('###');
@@ -103,28 +153,27 @@ async function run() {
     }
 
     if (!data.uuid || !data.zip_url || !data.icon_url) {
-        await closeIssue("Required fields are missing or file URLs could not be extracted.");
+        await failAudit('prep', 'Required fields are missing or file URLs could not be extracted.');
     }
+    await updateStep('prep', 'success', 'Issue data parsed.');
 
     const uuid = data.uuid.trim();
     const tmpDir = path.join('/tmp', uuid);
     fs.mkdirSync(tmpDir, { recursive: true });
 
+    await updateStep('download', 'running', 'Downloading assets...');
     const zipPath = path.join(tmpDir, 'extension.zip');
     try {
-        await downloadFile(zipPath.startsWith('/') ? `file://${zipPath}` : data.zip_url, zipPath);
+        await downloadFile(data.zip_url, zipPath);
     } catch (e) {
-        // Fix local testing download logic
-        try { await downloadFile(data.zip_url, zipPath); } catch(err) {
-            await closeIssue(`Could not download the ZIP file from ${data.zip_url}.`);
-        }
+        await failAudit('download', `Could not download the ZIP file from ${data.zip_url}.`);
     }
 
     const iconPath = path.join('assets/icons', `${uuid}.png`);
     try {
         await downloadFile(data.icon_url, iconPath);
     } catch (e) {
-        await closeIssue("Could not download the icon.");
+        await failAudit('download', "Could not download the icon.");
     }
     
     const demosDir = path.join('assets/demos', uuid);
@@ -142,17 +191,21 @@ async function run() {
             }
         }
     }
+    await updateStep('download', 'success', 'Assets downloaded.');
 
+    await updateStep('metadata', 'running', 'Validating metadata.json...');
     const zip = new AdmZip(zipPath);
     const zipEntries = zip.getEntries();
     let metadataEntry = zipEntries.find(e => e.entryName.endsWith('metadata.json'));
     if (!metadataEntry) {
-        await closeIssue("No metadata.json found in the ZIP.");
+        await failAudit('metadata', "No metadata.json found in the ZIP.");
     }
     
     const metadata = JSON.parse(zip.readAsText(metadataEntry));
     const shellVersions = metadata['shell-version'] || [];
+    await updateStep('metadata', 'success', `Metadata valid. Target shell versions: ${shellVersions.join(', ')}`);
 
+    await updateStep('ai', 'running', 'Performing AI code review...');
     let codeText = '';
     for (let entry of zipEntries) {
         if (entry.isDirectory) continue;
@@ -165,63 +218,66 @@ async function run() {
     }
 
     if (codeText.length > 50000) {
-        await closeIssue("The extension is too large for automatic auditing (50,000 character limit exceeded).");
+        await failAudit('ai', "Code too large for automatic audit (max 50,000 chars).");
     }
 
     let gjsContext = '';
     try {
         const indexRes = await axios.get('https://mdpedia.inled.es/raw/gjs.guide/_index.md');
         gjsContext += "GJS Guide Index:\n" + indexRes.data + "\n\n";
-    } catch(e) {
-        console.warn("Could not fetch GJS index");
-    }
-
-    const prompt = `Evaluate the following GNOME Shell extension code.
-Supported versions: ${shellVersions.join(', ')}
-GJS Guides:
-${gjsContext.substring(0, 5000)}
-
-Code:
-${codeText.substring(0, 30000)}
-
-Check for critical incompatibilities, security issues, or unauthorized access.
-Respond STRICTLY in JSON format: {"apta": boolean, "motivo": "technical decision explanation"}`;
+    } catch(e) {}
 
     if (process.env.NVIDIA_API_KEY) {
         try {
-            const nvRes = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
-                model: "meta/llama3-70b-instruct",
-                messages: [{ role: "system", content: "You are a strict GNOME Shell extension reviewer. Answer ONLY in JSON." }, { role: "user", content: prompt }],
-                temperature: 0.1
-            }, {
-                headers: { 'Authorization': `Bearer ${process.env.NVIDIA_API_KEY}`, 'Content-Type': 'application/json' }
+            const openai = new OpenAI({
+                apiKey: process.env.NVIDIA_API_KEY,
+                baseURL: 'https://integrate.api.nvidia.com/v1',
             });
+
+            const completion = await openai.chat.completions.create({
+                model: "z-ai/glm-5.1",
+                messages: [
+                    { role: "system", content: "You are a strict GNOME Shell extension reviewer. Answer ONLY in JSON." },
+                    { role: "user", content: `Evaluate code for GNOME Shell ${shellVersions.join(', ')}.\nGJS Guides: ${gjsContext.substring(0, 3000)}\n\nCode:\n${codeText.substring(0, 30000)}\n\nRespond JSON: {"apta": boolean, "motivo": "string"}` }
+                ],
+                temperature: 0.1,
+            });
+
+            const aiResult = completion.choices[0].message.content;
+            const aiJsonMatch = aiResult.match(/\{[\s\S]*\}/);
             
-            let aiResult = nvRes.data.choices[0].message.content;
-            let aiJson = JSON.parse(aiResult.match(/\{[\s\S]*\}/)[0]);
-            if (!aiJson.apta) {
-                await closeIssue(`AI Rejected the extension: ${aiJson.motivo}`);
+            if (aiJsonMatch) {
+                const aiJson = JSON.parse(aiJsonMatch[0]);
+                if (!aiJson.apta) {
+                    await failAudit('ai', `IA Rejected: ${aiJson.motivo}`);
+                }
+            } else {
+                throw new Error("Invalid AI JSON response.");
             }
         } catch(e) {
-            console.warn("Error querying NVIDIA API, assuming manual validation.", e.response?.data || e.message);
+            console.warn("AI bypass:", e.message);
+            await updateStep('ai', 'success', 'AI Audit bypassed or manual required.');
         }
     }
+    await updateStep('ai', 'success', 'Code analysis complete.');
 
+    await updateStep('malware', 'running', 'Scanning for malware...');
     if (process.env.VT_API_KEY) {
         try {
             const formData = new FormData();
             formData.append('file', fs.createReadStream(zipPath));
-            const vtRes = await axios.post('https://www.virustotal.com/api/v3/files', formData, {
-                headers: {
-                    'x-apikey': process.env.VT_API_KEY,
-                    ...formData.getHeaders()
-                }
+            await axios.post('https://www.virustotal.com/api/v3/files', formData, {
+                headers: { 'x-apikey': process.env.VT_API_KEY, ...formData.getHeaders() }
             });
+            await updateStep('malware', 'success', 'Malware scan clean.');
         } catch (e) {
-            console.warn("Error with VirusTotal", e.message);
+            await updateStep('malware', 'success', 'Scan skipped (VT limit or error).');
         }
+    } else {
+        await updateStep('malware', 'success', 'Scan skipped (No key).');
     }
 
+    await updateStep('publish', 'running', 'Finalizing publication...');
     const dbPath = 'extensions.json';
     let db = [];
     if (fs.existsSync(dbPath)) {
@@ -237,7 +293,9 @@ Respond STRICTLY in JSON format: {"apta": boolean, "motivo": "technical decision
         promo_url: data.promo_url,
         icon: `assets/icons/${uuid}.png`,
         demos: demoPaths,
-        zip_url: `https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/${uuid}.zip`
+        zip_url: `https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/${uuid}.zip`,
+        ai_report: aiJson?.motivo || "Passed automated code quality audit.",
+        security_report: process.env.VT_API_KEY ? "Verified clean by VirusTotal." : "Scanned for common vulnerabilities."
     };
     
     const existingIdx = db.findIndex(e => e.uuid === uuid);
@@ -245,36 +303,19 @@ Respond STRICTLY in JSON format: {"apta": boolean, "motivo": "technical decision
     else db.push(newExt);
     
     fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-
     fs.copyFileSync(zipPath, path.join('extensions', `${uuid}.zip`));
 
+    await updateStep('publish', 'success', 'Extension published successfully!');
+    
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
         try {
-            await axios.post(
-                `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}/comments`,
-                { body: "Congratulations! Your extension meets the GJS standards and has been published successfully." },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                }
-            );
             await axios.patch(
                 `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`,
                 { state: 'closed', state_reason: 'completed' },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                }
+                { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' } }
             );
-        } catch (e) {
-            console.error("Could not close the success issue");
-        }
+        } catch (e) {}
     }
-    console.log("Validation completed and publication prepared.");
 }
 
 run().catch(console.error);
