@@ -280,17 +280,55 @@ async function run() {
     }
     await updateStep('ai', 'success', 'Code analysis complete.');
 
-    await updateStep('malware', 'running', 'Scanning for malware...');
+    await updateStep('malware', 'running', 'Scanning for malware (waiting for full report)...');
+    let vtVerdict = "Scanned for common vulnerabilities.";
     if (process.env.VT_API_KEY) {
         try {
             const formData = new FormData();
             formData.append('file', fs.createReadStream(zipPath));
-            await axios.post('https://www.virustotal.com/api/v3/files', formData, {
+            const uploadRes = await axios.post('https://www.virustotal.com/api/v3/files', formData, {
                 headers: { 'x-apikey': process.env.VT_API_KEY, ...formData.getHeaders() }
             });
-            await updateStep('malware', 'success', 'Malware scan clean.');
+
+            const analysisId = uploadRes.data.data.id;
+            console.log(`VT Analysis ID: ${analysisId}`);
+
+            // Polling logic: wait up to 2 minutes
+            let attempts = 0;
+            const maxAttempts = 12; // 12 * 10s = 120s
+            let completed = false;
+
+            while (attempts < maxAttempts && !completed) {
+                attempts++;
+                await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10s
+                
+                const reportRes = await axios.get(`https://www.virustotal.com/api/v3/analyses/${analysisId}`, {
+                    headers: { 'x-apikey': process.env.VT_API_KEY }
+                });
+
+                const status = reportRes.data.data.attributes.status;
+                if (status === 'completed') {
+                    completed = true;
+                    const stats = reportRes.data.data.attributes.stats;
+                    const detections = stats.malicious + stats.suspicious;
+                    
+                    if (detections > 0) {
+                        await failAudit('malware', `Malware detected! VirusTotal reported ${detections} malicious/suspicious hits.`);
+                    }
+                    vtVerdict = `Verified clean by VirusTotal (${stats.harmless + stats.undetected} engines).`;
+                } else {
+                    await updateStep('malware', 'running', `Scanning... (${status}, attempt ${attempts}/${maxAttempts})`);
+                }
+            }
+
+            if (!completed) {
+                vtVerdict = "VirusTotal scan timed out, but file was submitted for analysis.";
+            }
+
+            await updateStep('malware', 'success', vtVerdict);
         } catch (e) {
-            await updateStep('malware', 'success', 'Scan skipped (VT limit or error).');
+            console.error("VirusTotal Error:", e.response?.data || e.message);
+            await updateStep('malware', 'success', 'Scan skipped (VT API error or limit).');
         }
     } else {
         await updateStep('malware', 'success', 'Scan skipped (No key).');
@@ -314,7 +352,7 @@ async function run() {
         demos: demoPaths,
         zip_url: `https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/${uuid}.zip`,
         ai_report: process.env.AI_MOTIVO || "Passed automated code quality audit.",
-        security_report: process.env.VT_API_KEY ? "Verified clean by VirusTotal." : "Scanned for common vulnerabilities."
+        security_report: vtVerdict
     };
     
     const existingIdx = db.findIndex(e => e.uuid === uuid);
