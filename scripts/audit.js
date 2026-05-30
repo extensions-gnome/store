@@ -65,32 +65,41 @@ async function updateStep(id, status, message) {
 
 async function downloadFile(url, dest) {
     console.log(`Downloading: ${url} -> ${dest}`);
+    const dir = path.dirname(dest);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+
     if (url.startsWith('file://')) {
         const filePath = url.replace('file://', '');
         fs.copyFileSync(filePath, dest);
         return;
     }
-    const response = await axios({
-        url,
-        method: 'GET',
-        responseType: 'stream',
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (GNOME Beta Store Bot)'
-        }
-    });
-    return new Promise((resolve, reject) => {
-        const writer = fs.createWriteStream(dest);
-        response.data.pipe(writer);
-        let error = null;
-        writer.on('error', err => {
-            error = err;
-            writer.close();
-            reject(err);
+    try {
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'stream',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (GNOME Beta Store Bot)'
+            }
         });
-        writer.on('close', () => {
-            if (!error) resolve();
+        return new Promise((resolve, reject) => {
+            const writer = fs.createWriteStream(dest);
+            response.data.pipe(writer);
+            let error = null;
+            writer.on('error', err => {
+                error = err;
+                writer.close();
+                reject(err);
+            });
+            writer.on('close', () => {
+                if (!error) resolve();
+            });
         });
-    });
+    } catch (e) {
+        throw new Error(`HTTP ${e.response?.status || 'Error'}: ${e.message}`);
+    }
 }
 
 function extractLink(text) {
