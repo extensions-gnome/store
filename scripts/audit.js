@@ -227,15 +227,15 @@ async function run() {
         gjsContext += "GJS Guide Index:\n" + indexRes.data + "\n\n";
     } catch(e) {}
 
-    if (process.env.NVIDIA_API_KEY) {
+    if (process.env.GROQ_API_KEY) {
         try {
             const openai = new OpenAI({
-                apiKey: process.env.NVIDIA_API_KEY,
-                baseURL: 'https://integrate.api.nvidia.com/v1',
+                apiKey: process.env.GROQ_API_KEY,
+                baseURL: 'https://api.groq.com/openai/v1',
             });
 
             const completion = await openai.chat.completions.create({
-                model: "z-ai/glm-5.1",
+                model: "llama-3.3-70b-versatile",
                 messages: [
                     { role: "system", content: "You are a strict GNOME Shell extension reviewer. Answer ONLY in JSON." },
                     { role: "user", content: `Evaluate code for GNOME Shell ${shellVersions.join(', ')}.\nGJS Guides: ${gjsContext.substring(0, 3000)}\n\nCode:\n${codeText.substring(0, 30000)}\n\nRespond JSON: {"apta": boolean, "motivo": "string"}` }
@@ -249,7 +249,7 @@ async function run() {
             if (aiJsonMatch) {
                 const aiJson = JSON.parse(aiJsonMatch[0]);
                 if (!aiJson.apta) {
-                    await failAudit('ai', `IA Rejected: ${aiJson.motivo}`);
+                    await failAudit('ai', `AI Rejected: ${aiJson.motivo}`);
                 }
             } else {
                 throw new Error("Invalid AI JSON response.");
