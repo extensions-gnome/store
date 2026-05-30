@@ -1,0 +1,15 @@
+name: "🗑️ Delete Extension"
+description: "Request the removal of an extension (Admin or Owner only)"
+title: "[Extension] Delete: <Extension UUID>"
+labels: ["eliminar-extension"]
+body:
+  - type: markdown
+    attributes:
+      value: "Use this form to request the removal of an extension. You must be the owner of the extension OR the store admin (@jaimegh-es) for this request to be processed."
+  - type: input
+    id: uuid
+    attributes:
+      label: "Extension UUID"
+      description: "Enter the UUID of the extension to be removed"
+    validations:
+      required: true
