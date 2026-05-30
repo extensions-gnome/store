@@ -153,10 +153,13 @@ async function run() {
         if (header.includes('Screenshots')) formData.demo_urls = extractLinks(content);
     }
 
+    const issueTitle = (process.env.ISSUE_TITLE || '').toLowerCase();
+
     let mode = 'new';
-    if (labels.includes('actualizacion-zip')) mode = 'update-zip';
-    if (labels.includes('editar-metadata')) mode = 'edit-meta';
-    if (labels.includes('eliminar-extension')) mode = 'delete';
+    if (labels.includes('actualizacion-zip') || issueTitle.includes('update:')) mode = 'update-zip';
+    else if (labels.includes('editar-metadata') || issueTitle.includes('edit:')) mode = 'edit-meta';
+    else if (labels.includes('eliminar-extension') || issueTitle.includes('delete:')) mode = 'delete';
+    else if (labels.includes('nueva-extension') || issueTitle.includes('new:')) mode = 'new';
 
     let targetExt = null;
     let uuid = formData.uuid;
@@ -221,6 +224,7 @@ async function run() {
     // DOWNLOAD & METADATA
     if (mode === 'new' || mode === 'update-zip') {
         await updateStep('download', 'running', 'Downloading ZIP...');
+        if (!formData.zip_url) await failAudit('download', 'ZIP file URL is missing. Did you upload it?');
         zipPath = path.join(tmpDir, 'extension.zip');
         await downloadFile(formData.zip_url, zipPath);
         

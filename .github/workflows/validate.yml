@@ -32,6 +32,7 @@ jobs:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_USER: ${{ github.event.issue.user.login }}
           ISSUE_LABELS: ${{ toJson(github.event.issue.labels) }}
           REPOSITORY: ${{ github.repository }}
