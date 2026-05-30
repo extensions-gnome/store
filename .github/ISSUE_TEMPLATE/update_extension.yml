@@ -1,0 +1,15 @@
+name: "🚀 Update ZIP (New Version)"
+description: "Upload a new version of an existing extension"
+title: "[Extension] Update: <Extension UUID>"
+labels: ["actualizacion-zip"]
+body:
+  - type: markdown
+    attributes:
+      value: "Simply upload the new ZIP. We will extract the UUID and Version from metadata.json automatically."
+  - type: textarea
+    id: zip_file
+    attributes:
+      label: "ZIP File"
+      description: "Drag the new .zip file here"
+    validations:
+      required: true

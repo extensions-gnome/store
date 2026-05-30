@@ -1,0 +1,31 @@
+name: "📝 Edit Metadata (No ZIP)"
+description: "Change the description, icon, or screenshots without uploading a new ZIP"
+title: "[Extension] Edit: <Extension UUID>"
+labels: ["editar-metadata"]
+body:
+  - type: markdown
+    attributes:
+      value: "Update fields for your extension. Leave blank what you don't want to change."
+  - type: input
+    id: uuid
+    attributes:
+      label: "Extension UUID"
+      description: "Which extension are you editing?"
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: "New Name (Optional)"
+  - type: textarea
+    id: description
+    attributes:
+      label: "New Description (Optional)"
+  - type: textarea
+    id: icon_file
+    attributes:
+      label: "New Icon (Optional)"
+  - type: textarea
+    id: demo_files
+    attributes:
+      label: "New Screenshots (Optional)"

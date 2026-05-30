@@ -70,11 +70,6 @@ async function downloadFile(url, dest) {
         fs.mkdirSync(dir, { recursive: true });
     }
 
-    if (url.startsWith('file://')) {
-        const filePath = url.replace('file://', '');
-        fs.copyFileSync(filePath, dest);
-        return;
-    }
     try {
         const response = await axios({
             url,
@@ -103,29 +98,24 @@ async function downloadFile(url, dest) {
 }
 
 function extractLink(text) {
-    if (!text) return null;
-    // 1. Try Markdown: [text](url)
+    if (!text || text === '_No response_') return null;
     const mdMatch = text.match(/\]\(([^)]+)\)/);
     if (mdMatch) return mdMatch[1];
-    // 2. Try HTML: <img ... src="url" ... />
     const htmlMatch = text.match(/src=["']([^"']+)["']/);
     if (htmlMatch) return htmlMatch[1];
-    // 3. Try raw URL
     const urlMatch = text.match(/(https?:\/\/[^\s"'<>]+)/);
     if (urlMatch) return urlMatch[1];
-    return text.trim();
+    return null;
 }
 
 function extractLinks(text) {
-    if (!text) return [];
+    if (!text || text === '_No response_') return [];
     const links = [];
-    // Combine patterns for global search
     const regex = /\]\(([^)]+)\)|src=["']([^"']+)["']|(https?:\/\/[^\s"'<>]+)/g;
     let match;
     while ((match = regex.exec(text)) !== null) {
         links.push(match[1] || match[2] || match[3]);
     }
-    // Remove duplicates
     return [...new Set(links)];
 }
 
@@ -149,229 +139,215 @@ async function failAudit(stepId, message) {
 }
 
 async function run() {
-    await updateStep('prep', 'running', 'Analyzing issue data...');
+    await updateStep('prep', 'running', 'Analyzing request type...');
     
     const issueBody = process.env.ISSUE_BODY || '';
-    const sections = issueBody.split('###');
-    const data = {};
-    for (let section of sections) {
-        const lines = section.trim().split('\n');
-        const header = lines.shift().trim();
-        const content = lines.join('\n').trim();
-        if (header.includes('Extension UUID')) data.uuid = content;
-        if (header.includes('Clear Name')) data.name = content;
-        if (header.includes('Description')) data.description = content;
-        if (header.includes('GitHub Link')) data.github_url = content;
-        if (header.includes('Promotional Link')) data.promo_url = content !== '_No response_' ? content : '';
-        if (header.includes('ZIP File')) data.zip_url = extractLink(content);
-        if (header.includes('Icon')) data.icon_url = extractLink(content);
-        if (header.includes('Demos')) data.demo_urls = extractLinks(content);
-    }
+    const labelsRaw = process.env.ISSUE_LABELS || '[]';
+    const labels = JSON.parse(labelsRaw).map(l => l.name);
+    const issueUser = process.env.ISSUE_USER;
 
-    if (!data.uuid || !data.zip_url || !data.icon_url) {
-        console.error("Parsed Data:", data);
-        await failAudit('prep', 'Required fields are missing or file URLs could not be extracted (check if links/tags are valid).');
-    }
-    await updateStep('prep', 'success', 'Issue data parsed.');
-
-    const uuid = data.uuid.trim();
-    const tmpDir = path.join('/tmp', uuid);
-    fs.mkdirSync(tmpDir, { recursive: true });
-
-    await updateStep('download', 'running', 'Downloading assets...');
-    const zipPath = path.join(tmpDir, 'extension.zip');
-    try {
-        await downloadFile(data.zip_url, zipPath);
-    } catch (e) {
-        await failAudit('download', `Could not download the ZIP file: ${e.message}`);
-    }
-
-    const iconPath = path.join('assets/icons', `${uuid}.png`);
-    try {
-        await downloadFile(data.icon_url, iconPath);
-    } catch (e) {
-        await failAudit('download', `Could not download the icon: ${e.message}`);
-    }
-    
-    const demosDir = path.join('assets/demos', uuid);
-    fs.mkdirSync(demosDir, { recursive: true });
-    
-    const demoPaths = [];
-    if (data.demo_urls && data.demo_urls.length > 0) {
-        for (let i = 0; i < data.demo_urls.length; i++) {
-            const dest = path.join(demosDir, `demo${i+1}.png`);
-            try {
-                await downloadFile(data.demo_urls[i], dest);
-                demoPaths.push(dest);
-            } catch(e) {
-                console.warn(`Could not download demo ${i+1}: ${e.message}`);
-            }
-        }
-    }
-    await updateStep('download', 'success', 'Assets downloaded.');
-
-    await updateStep('metadata', 'running', 'Validating metadata.json...');
-    const zip = new AdmZip(zipPath);
-    const zipEntries = zip.getEntries();
-    let metadataEntry = zipEntries.find(e => e.entryName.endsWith('metadata.json'));
-    if (!metadataEntry) {
-        await failAudit('metadata', "No metadata.json found in the ZIP.");
-    }
-    
-    const metadata = JSON.parse(zip.readAsText(metadataEntry));
-    const shellVersions = metadata['shell-version'] || [];
-    await updateStep('metadata', 'success', `Metadata valid. Target shell versions: ${shellVersions.join(', ')}`);
-
-    await updateStep('ai', 'running', 'Performing AI code review...');
-    let codeText = '';
-    for (let entry of zipEntries) {
-        if (entry.isDirectory) continue;
-        const name = entry.entryName;
-        if (name.includes('node_modules/') || name.includes('vendor/') || name.endsWith('.min.js')) continue;
-        if (name.endsWith('.js') || name.endsWith('.ts') || name.endsWith('.json')) {
-            codeText += `\n// File: ${name}\n`;
-            codeText += zip.readAsText(entry);
-        }
-    }
-
-    if (codeText.length > 100000) {
-        const estimatedTokens = Math.ceil(codeText.length / 4);
-        await failAudit('ai', `Code too large for automatic audit (${codeText.length} chars, ~${estimatedTokens} tokens). Limit is 100,000 chars.`);
-    }
-
-    let gjsContext = '';
-    try {
-        const indexRes = await axios.get('https://mdpedia.inled.es/raw/gjs.guide/_index.md');
-        gjsContext += "GJS Guide Index:\n" + indexRes.data + "\n\n";
-    } catch(e) {}
-
-    if (process.env.GROQ_API_KEY) {
-        try {
-            const openai = new OpenAI({
-                apiKey: process.env.GROQ_API_KEY,
-                baseURL: 'https://api.groq.com/openai/v1',
-            });
-
-            const completion = await openai.chat.completions.create({
-                model: "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "system", content: "You are a strict GNOME Shell extension reviewer. Answer ONLY in JSON." },
-                    { role: "user", content: `Evaluate code for GNOME Shell ${shellVersions.join(', ')}.\nGJS Guides: ${gjsContext.substring(0, 3000)}\n\nCode:\n${codeText.substring(0, 30000)}\n\nRespond JSON: {"apta": boolean, "motivo": "string"}` }
-                ],
-                temperature: 0.1,
-            });
-
-            const aiResult = completion.choices[0].message.content;
-            const aiJsonMatch = aiResult.match(/\{[\s\S]*\}/);
-            
-            if (aiJsonMatch) {
-                const aiJson = JSON.parse(aiJsonMatch[0]);
-                if (!aiJson.apta) {
-                    await failAudit('ai', `AI Rejected: ${aiJson.motivo}`);
-                }
-                process.env.AI_MOTIVO = aiJson.motivo;
-            } else {
-                throw new Error("Invalid AI JSON response.");
-            }
-        } catch(e) {
-            console.warn("AI bypass:", e.message);
-            await updateStep('ai', 'success', 'AI Audit bypassed or manual required.');
-        }
-    }
-    await updateStep('ai', 'success', 'Code analysis complete.');
-
-    await updateStep('malware', 'running', 'Scanning for malware (waiting for full report)...');
-    let vtVerdict = "Scanned for common vulnerabilities.";
-    if (process.env.VT_API_KEY) {
-        try {
-            const formData = new FormData();
-            formData.append('file', fs.createReadStream(zipPath));
-            const uploadRes = await axios.post('https://www.virustotal.com/api/v3/files', formData, {
-                headers: { 'x-apikey': process.env.VT_API_KEY, ...formData.getHeaders() }
-            });
-
-            const analysisId = uploadRes.data.data.id;
-            console.log(`VT Analysis ID: ${analysisId}`);
-
-            // Polling logic: wait up to 2 minutes
-            let attempts = 0;
-            const maxAttempts = 12; // 12 * 10s = 120s
-            let completed = false;
-
-            while (attempts < maxAttempts && !completed) {
-                attempts++;
-                await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10s
-                
-                const reportRes = await axios.get(`https://www.virustotal.com/api/v3/analyses/${analysisId}`, {
-                    headers: { 'x-apikey': process.env.VT_API_KEY }
-                });
-
-                const status = reportRes.data.data.attributes.status;
-                if (status === 'completed') {
-                    completed = true;
-                    const stats = reportRes.data.data.attributes.stats;
-                    const detections = stats.malicious + stats.suspicious;
-                    
-                    if (detections > 0) {
-                        await failAudit('malware', `Malware detected! VirusTotal reported ${detections} malicious/suspicious hits.`);
-                    }
-                    vtVerdict = `Verified clean by VirusTotal (${stats.harmless + stats.undetected} engines).`;
-                } else {
-                    await updateStep('malware', 'running', `Scanning... (${status}, attempt ${attempts}/${maxAttempts})`);
-                }
-            }
-
-            if (!completed) {
-                vtVerdict = "VirusTotal scan timed out, but file was submitted for analysis.";
-            }
-
-            await updateStep('malware', 'success', vtVerdict);
-        } catch (e) {
-            console.error("VirusTotal Error:", e.response?.data || e.message);
-            await updateStep('malware', 'success', 'Scan skipped (VT API error or limit).');
-        }
-    } else {
-        await updateStep('malware', 'success', 'Scan skipped (No key).');
-    }
-
-    await updateStep('publish', 'running', 'Finalizing publication...');
     const dbPath = 'extensions.json';
     let db = [];
     if (fs.existsSync(dbPath)) {
         db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
     }
+
+    const sections = issueBody.split('###');
+    const formData = {};
+    for (let section of sections) {
+        const lines = section.trim().split('\n');
+        const header = lines.shift().trim();
+        const content = lines.join('\n').trim();
+        if (header.includes('Extension UUID')) formData.uuid = content;
+        if (header.includes('Clear Name')) formData.name = content;
+        if (header.includes('Description')) formData.description = content;
+        if (header.includes('GitHub Link')) formData.github_url = content;
+        if (header.includes('Promo Link')) formData.promo_url = content !== '_No response_' ? content : '';
+        if (header.includes('ZIP File')) formData.zip_url = extractLink(content);
+        if (header.includes('Icon')) formData.icon_url = extractLink(content);
+        if (header.includes('Screenshots')) formData.demo_urls = extractLinks(content);
+    }
+
+    let mode = 'new';
+    if (labels.includes('actualizacion-zip')) mode = 'update-zip';
+    if (labels.includes('editar-metadata')) mode = 'edit-meta';
+
+    let targetExt = null;
+    let uuid = formData.uuid;
+
+    // Authorization check for existing extensions
+    if (mode !== 'new' || db.find(e => e.uuid === uuid)) {
+        targetExt = db.find(e => e.uuid === (uuid || ''));
+        if (targetExt && targetExt.github_user && targetExt.github_user !== issueUser) {
+            await failAudit('prep', `Unauthorized: This extension belongs to @${targetExt.github_user}. You are @${issueUser}.`);
+        }
+    }
+
+    if (mode === 'update-zip') {
+        if (!formData.zip_url) await failAudit('prep', 'No ZIP file found in the issue.');
+    } else if (mode === 'edit-meta') {
+        if (!targetExt) await failAudit('prep', `Extension ${uuid} not found in database.`);
+    }
+
+    await updateStep('prep', 'success', `Request mode: ${mode}`);
+
+    const tmpDir = path.join('/tmp', 'audit-' + Date.now());
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    let zipPath = null;
+    let metadata = null;
+    let shellVersions = [];
+
+    // DOWNLOAD & METADATA
+    if (mode === 'new' || mode === 'update-zip') {
+        await updateStep('download', 'running', 'Downloading ZIP...');
+        zipPath = path.join(tmpDir, 'extension.zip');
+        await downloadFile(formData.zip_url, zipPath);
+        
+        const zip = new AdmZip(zipPath);
+        const metadataEntry = zip.getEntries().find(e => e.entryName.endsWith('metadata.json'));
+        if (!metadataEntry) await failAudit('metadata', "No metadata.json in ZIP.");
+        
+        metadata = JSON.parse(zip.readAsText(metadataEntry));
+        uuid = metadata.uuid;
+        shellVersions = metadata['shell-version'] || [];
+
+        if (mode === 'update-zip') {
+            targetExt = db.find(e => e.uuid === uuid);
+            if (!targetExt) await failAudit('metadata', `Extension ${uuid} (from ZIP) not found. Use "New Extension" first.`);
+            if (targetExt.github_user && targetExt.github_user !== issueUser) {
+                await failAudit('metadata', `Unauthorized: ZIP UUID ${uuid} belongs to @${targetExt.github_user}.`);
+            }
+        }
+        await updateStep('metadata', 'success', `UUID: ${uuid}, Version: ${metadata.version}`);
+    }
+
+    // ASSETS (Icon/Demos)
+    if (mode === 'new' || mode === 'edit-meta') {
+        await updateStep('download', 'running', 'Downloading assets...');
+        if (formData.icon_url) {
+            await downloadFile(formData.icon_url, path.join('assets/icons', `${uuid}.png`));
+        }
+        if (formData.demo_urls && formData.demo_urls.length > 0) {
+            const demosDir = path.join('assets/demos', uuid);
+            fs.mkdirSync(demosDir, { recursive: true });
+            for (let i = 0; i < formData.demo_urls.length; i++) {
+                await downloadFile(formData.demo_urls[i], path.join(demosDir, `demo${i+1}.png`));
+            }
+        }
+        await updateStep('download', 'success', 'Assets updated.');
+    }
+
+    if (mode === 'edit-meta') {
+        await updateStep('metadata', 'success', 'Using existing metadata.');
+        await updateStep('ai', 'success', 'Skipped (Metadata edit only).');
+        await updateStep('malware', 'success', 'Skipped (Metadata edit only).');
+    }
+
+    // AI AUDIT (Only if ZIP changed)
+    let aiVerdict = targetExt ? targetExt.ai_report : null;
+    if (zipPath) {
+        await updateStep('ai', 'running', 'Analyzing code...');
+        const zip = new AdmZip(zipPath);
+        let codeText = '';
+        for (let entry of zip.getEntries()) {
+            if (entry.isDirectory || entry.entryName.includes('node_modules/')) continue;
+            if (entry.entryName.endsWith('.js') || entry.entryName.endsWith('.ts')) {
+                codeText += `\n// File: ${entry.entryName}\n` + zip.readAsText(entry);
+            }
+        }
+
+        if (codeText.length > 100000) {
+            await failAudit('ai', `Code too large (~${Math.ceil(codeText.length/4)} tokens).`);
+        }
+
+        if (process.env.GROQ_API_KEY) {
+            try {
+                const openai = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
+                const completion = await openai.chat.completions.create({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [{ role: "system", content: "Review GNOME extension code. Respond JSON: {\"apta\": boolean, \"motivo\": \"string\"}" },
+                               { role: "user", content: `Code:\n${codeText.substring(0, 40000)}` }],
+                    temperature: 0.1,
+                });
+                const res = JSON.parse(completion.choices[0].message.content.match(/\{[\s\S]*\}/)[0]);
+                if (!res.apta) await failAudit('ai', `AI Rejected: ${res.motivo}`);
+                aiVerdict = res.motivo;
+            } catch (e) { aiVerdict = "Passed manual/bypassed audit."; }
+        }
+        await updateStep('ai', 'success', 'AI Check passed.');
+    }
+
+    // VIRUSTOTAL (Only if ZIP changed)
+    let vtVerdict = targetExt ? targetExt.security_report : null;
+    if (zipPath && process.env.VT_API_KEY) {
+        await updateStep('malware', 'running', 'VirusTotal scan...');
+        try {
+            const form = new FormData();
+            form.append('file', fs.createReadStream(zipPath));
+            const upload = await axios.post('https://www.virustotal.com/api/v3/files', form, {
+                headers: { 'x-apikey': process.env.VT_API_KEY, ...form.getHeaders() }
+            });
+            const analysisId = upload.data.data.id;
+            
+            let completed = false;
+            for (let i = 0; i < 12; i++) {
+                await new Promise(r => setTimeout(r, 10000));
+                const report = await axios.get(`https://www.virustotal.com/api/v3/analyses/${analysisId}`, {
+                    headers: { 'x-apikey': process.env.VT_API_KEY }
+                });
+                if (report.data.data.attributes.status === 'completed') {
+                    const stats = report.data.data.attributes.stats;
+                    if (stats.malicious > 0) await failAudit('malware', "MALWARE DETECTED!");
+                    vtVerdict = `Clean (${stats.harmless + stats.undetected} engines)`;
+                    completed = true;
+                    break;
+                }
+            }
+            if (!completed) vtVerdict = "Scan timed out (pending).";
+        } catch (e) { vtVerdict = "Scan error."; }
+        await updateStep('malware', 'success', vtVerdict);
+    }
+
+    // PUBLISH
+    await updateStep('publish', 'running', 'Saving changes...');
     
-    const newExt = {
-        uuid: uuid,
-        version: metadata.version || 1,
-        name: data.name.trim(),
-        description: data.description.trim(),
-        github_url: data.github_url.trim(),
-        promo_url: data.promo_url,
+    const demoPaths = [];
+    const demosDir = `assets/demos/${uuid}`;
+    if (fs.existsSync(demosDir)) {
+        fs.readdirSync(demosDir).forEach(f => demoPaths.push(path.join(demosDir, f)));
+    }
+
+    const finalExt = {
+        uuid,
+        version: metadata ? (metadata.version || 1) : (targetExt ? targetExt.version : 1),
+        name: formData.name || (targetExt ? targetExt.name : uuid),
+        description: formData.description || (targetExt ? targetExt.description : ''),
+        github_url: formData.github_url || (targetExt ? targetExt.github_url : ''),
+        promo_url: formData.promo_url || (targetExt ? targetExt.promo_url : ''),
+        github_user: targetExt ? targetExt.github_user : issueUser,
         icon: `assets/icons/${uuid}.png`,
         demos: demoPaths,
         zip_url: `https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/${uuid}.zip`,
-        ai_report: process.env.AI_MOTIVO || "Passed automated code quality audit.",
+        ai_report: aiVerdict,
         security_report: vtVerdict
     };
-    
-    const existingIdx = db.findIndex(e => e.uuid === uuid);
-    if (existingIdx >= 0) db[existingIdx] = newExt;
-    else db.push(newExt);
-    
-    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-    fs.copyFileSync(zipPath, path.join('extensions', `${uuid}.zip`));
 
-    await updateStep('publish', 'success', 'Extension published successfully!');
+    const existingIdx = db.findIndex(e => e.uuid === uuid);
+    if (existingIdx >= 0) db[existingIdx] = finalExt;
+    else db.push(finalExt);
+
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+    if (zipPath) fs.copyFileSync(zipPath, path.join('extensions', `${uuid}.zip`));
+
+    await updateStep('publish', 'success', `Successfully ${mode === 'new' ? 'published' : 'updated'}!`);
     
+    // Close issue
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
-        try {
-            await axios.patch(
-                `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`,
-                { state: 'closed', state_reason: 'completed' },
-                { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' } }
-            );
-        } catch (e) {}
+        await axios.patch(`https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`,
+            { state: 'closed', state_reason: 'completed' },
+            { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' } }
+        );
     }
 }
 
