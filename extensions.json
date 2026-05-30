@@ -1,0 +1,14 @@
+[
+  {
+    "uuid": "test-ext@example.com",
+    "version": 1,
+    "name": "Test Extension",
+    "description": "This is a test extension.",
+    "github_url": "https://github.com/test/test",
+    "icon": "assets/icons/test-ext@example.com.png",
+    "demos": [
+      "assets/demos/test-ext@example.com/demo1.png"
+    ],
+    "zip_url": "https://raw.githubusercontent.com/local/test/main/extensions/test-ext@example.com.zip"
+  }
+]

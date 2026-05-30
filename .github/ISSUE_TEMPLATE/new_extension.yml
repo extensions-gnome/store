@@ -1,0 +1,65 @@
+name: "Subir / Actualizar Extensión"
+description: "Sube o actualiza tu extensión para la GNOME Beta Store"
+title: "[Extensión] "
+labels: ["nueva-extension"]
+body:
+  - type: markdown
+    attributes:
+      value: "Por favor, rellena todos los campos para subir o actualizar tu extensión. Para los archivos (ZIP, Icono, Capturas), simplemente arrástralos al cuadro de texto correspondiente para que GitHub los suba."
+  - type: input
+    id: uuid
+    attributes:
+      label: "UUID de la extensión"
+      description: "Ej. mi-extension@autor.com"
+      placeholder: "mi-extension@autor.com"
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: "Nombre Claro"
+      description: "Nombre comercial o público de la extensión"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: "Descripción"
+      description: "Breve resumen de qué hace la extensión"
+    validations:
+      required: true
+  - type: input
+    id: github_url
+    attributes:
+      label: "Enlace de GitHub"
+      description: "URL del repositorio de código de la extensión"
+    validations:
+      required: true
+  - type: input
+    id: promo_url
+    attributes:
+      label: "Enlace Promocional o Página Web (Opcional)"
+      description: "URL para marketing, donaciones o documentación propia"
+    validations:
+      required: false
+  - type: textarea
+    id: zip_file
+    attributes:
+      label: "Archivo ZIP"
+      description: "Arrastra aquí el archivo .zip de tu extensión"
+    validations:
+      required: true
+  - type: textarea
+    id: icon_file
+    attributes:
+      label: "Icono (icon.png)"
+      description: "Arrastra aquí el icono de tu extensión (imagen cuadrada)"
+    validations:
+      required: true
+  - type: textarea
+    id: demo_files
+    attributes:
+      label: "Demos / Capturas"
+      description: "Arrastra aquí una o más capturas de pantalla de tu extensión"
+    validations:
+      required: true
