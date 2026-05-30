@@ -1,65 +1,65 @@
-name: "Subir / Actualizar Extensión"
-description: "Sube o actualiza tu extensión para la GNOME Beta Store"
-title: "[Extensión] "
+name: "Upload / Update Extension"
+description: "Submit or update your extension for the GNOME Beta Store"
+title: "[Extension] "
 labels: ["nueva-extension"]
 body:
   - type: markdown
     attributes:
-      value: "Por favor, rellena todos los campos para subir o actualizar tu extensión. Para los archivos (ZIP, Icono, Capturas), simplemente arrástralos al cuadro de texto correspondiente para que GitHub los suba."
+      value: "Please fill out all fields to submit or update your extension. For files (ZIP, Icon, Screenshots), simply drag and drop them into the corresponding text box for GitHub to upload them."
   - type: input
     id: uuid
     attributes:
-      label: "UUID de la extensión"
-      description: "Ej. mi-extension@autor.com"
-      placeholder: "mi-extension@autor.com"
+      label: "Extension UUID"
+      description: "e.g., my-extension@author.com"
+      placeholder: "my-extension@author.com"
     validations:
       required: true
   - type: input
     id: name
     attributes:
-      label: "Nombre Claro"
-      description: "Nombre comercial o público de la extensión"
+      label: "Clear Name"
+      description: "The public or commercial name of the extension"
     validations:
       required: true
   - type: textarea
     id: description
     attributes:
-      label: "Descripción"
-      description: "Breve resumen de qué hace la extensión"
+      label: "Description"
+      description: "A brief summary of what the extension does"
     validations:
       required: true
   - type: input
     id: github_url
     attributes:
-      label: "Enlace de GitHub"
-      description: "URL del repositorio de código de la extensión"
+      label: "GitHub Link"
+      description: "URL of the extension's code repository"
     validations:
       required: true
   - type: input
     id: promo_url
     attributes:
-      label: "Enlace Promocional o Página Web (Opcional)"
-      description: "URL para marketing, donaciones o documentación propia"
+      label: "Promotional Link or Website (Optional)"
+      description: "URL for marketing, donations, or your own documentation"
     validations:
       required: false
   - type: textarea
     id: zip_file
     attributes:
-      label: "Archivo ZIP"
-      description: "Arrastra aquí el archivo .zip de tu extensión"
+      label: "ZIP File"
+      description: "Drag the .zip file of your extension here"
     validations:
       required: true
   - type: textarea
     id: icon_file
     attributes:
-      label: "Icono (icon.png)"
-      description: "Arrastra aquí el icono de tu extensión (imagen cuadrada)"
+      label: "Icon (icon.png)"
+      description: "Drag your extension's icon here (square image)"
     validations:
       required: true
   - type: textarea
     id: demo_files
     attributes:
-      label: "Demos / Capturas"
-      description: "Arrastra aquí una o más capturas de pantalla de tu extensión"
+      label: "Demos / Screenshots"
+      description: "Drag one or more screenshots of your extension here"
     validations:
       required: true

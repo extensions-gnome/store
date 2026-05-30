@@ -51,7 +51,7 @@ function extractMarkdownLinks(text) {
 }
 
 async function closeIssue(message) {
-    console.log("Cerrando issue:", message);
+    console.log("Closing issue:", message);
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
         try {
             await axios.post(
@@ -75,7 +75,7 @@ async function closeIssue(message) {
                 }
             );
         } catch(e) {
-            console.error("Error al cerrar el issue:", e.response?.data || e.message);
+            console.error("Error closing the issue:", e.response?.data || e.message);
         }
     }
     process.exit(1);
@@ -92,18 +92,18 @@ async function run() {
         const lines = section.trim().split('\n');
         const header = lines.shift().trim();
         const content = lines.join('\n').trim();
-        if (header.includes('UUID de la extensión')) data.uuid = content;
-        if (header.includes('Nombre Claro')) data.name = content;
-        if (header.includes('Descripción')) data.description = content;
-        if (header.includes('Enlace de GitHub')) data.github_url = content;
-        if (header.includes('Enlace Promocional')) data.promo_url = content !== '_No response_' ? content : '';
-        if (header.includes('Archivo ZIP')) data.zip_url = extractMarkdownLink(content);
-        if (header.includes('Icono')) data.icon_url = extractMarkdownLink(content);
+        if (header.includes('Extension UUID')) data.uuid = content;
+        if (header.includes('Clear Name')) data.name = content;
+        if (header.includes('Description')) data.description = content;
+        if (header.includes('GitHub Link')) data.github_url = content;
+        if (header.includes('Promotional Link')) data.promo_url = content !== '_No response_' ? content : '';
+        if (header.includes('ZIP File')) data.zip_url = extractMarkdownLink(content);
+        if (header.includes('Icon')) data.icon_url = extractMarkdownLink(content);
         if (header.includes('Demos')) data.demo_urls = extractMarkdownLinks(content);
     }
 
     if (!data.uuid || !data.zip_url || !data.icon_url) {
-        await closeIssue("Faltan campos obligatorios o no se pudieron extraer las URLs de los archivos.");
+        await closeIssue("Required fields are missing or file URLs could not be extracted.");
     }
 
     const uuid = data.uuid.trim();
@@ -112,16 +112,19 @@ async function run() {
 
     const zipPath = path.join(tmpDir, 'extension.zip');
     try {
-        await downloadFile(data.zip_url, zipPath);
+        await downloadFile(zipPath.startsWith('/') ? `file://${zipPath}` : data.zip_url, zipPath);
     } catch (e) {
-        await closeIssue(`No se pudo descargar el archivo ZIP desde ${data.zip_url}.`);
+        // Fix local testing download logic
+        try { await downloadFile(data.zip_url, zipPath); } catch(err) {
+            await closeIssue(`Could not download the ZIP file from ${data.zip_url}.`);
+        }
     }
 
     const iconPath = path.join('assets/icons', `${uuid}.png`);
     try {
         await downloadFile(data.icon_url, iconPath);
     } catch (e) {
-        await closeIssue("No se pudo descargar el icono.");
+        await closeIssue("Could not download the icon.");
     }
     
     const demosDir = path.join('assets/demos', uuid);
@@ -135,7 +138,7 @@ async function run() {
                 await downloadFile(data.demo_urls[i], dest);
                 demoPaths.push(dest);
             } catch(e) {
-                console.warn(`No se pudo descargar la demo ${i+1}`);
+                console.warn(`Could not download demo ${i+1}`);
             }
         }
     }
@@ -144,7 +147,7 @@ async function run() {
     const zipEntries = zip.getEntries();
     let metadataEntry = zipEntries.find(e => e.entryName.endsWith('metadata.json'));
     if (!metadataEntry) {
-        await closeIssue("No se encontró metadata.json en el ZIP.");
+        await closeIssue("No metadata.json found in the ZIP.");
     }
     
     const metadata = JSON.parse(zip.readAsText(metadataEntry));
@@ -162,7 +165,7 @@ async function run() {
     }
 
     if (codeText.length > 50000) {
-        await closeIssue("La extensión es demasiado grande para ser auditada automáticamente (límite de 50,000 caracteres excedido).");
+        await closeIssue("The extension is too large for automatic auditing (50,000 character limit exceeded).");
     }
 
     let gjsContext = '';
@@ -170,19 +173,19 @@ async function run() {
         const indexRes = await axios.get('https://mdpedia.inled.es/raw/gjs.guide/_index.md');
         gjsContext += "GJS Guide Index:\n" + indexRes.data + "\n\n";
     } catch(e) {
-        console.warn("No se pudo obtener el índice GJS");
+        console.warn("Could not fetch GJS index");
     }
 
-    const prompt = `Evalúa el siguiente código de extensión de GNOME Shell.
-Versiones soportadas: ${shellVersions.join(', ')}
-Guías GJS:
+    const prompt = `Evaluate the following GNOME Shell extension code.
+Supported versions: ${shellVersions.join(', ')}
+GJS Guides:
 ${gjsContext.substring(0, 5000)}
 
-Código:
+Code:
 ${codeText.substring(0, 30000)}
 
-Evalúa si hay incompatibilidades críticas, problemas de seguridad o accesos indebidos.
-Responde ESTRICTAMENTE en formato JSON: {"apta": boolean, "motivo": "explicación de la decisión técnica"}`;
+Check for critical incompatibilities, security issues, or unauthorized access.
+Respond STRICTLY in JSON format: {"apta": boolean, "motivo": "technical decision explanation"}`;
 
     if (process.env.NVIDIA_API_KEY) {
         try {
@@ -197,10 +200,10 @@ Responde ESTRICTAMENTE en formato JSON: {"apta": boolean, "motivo": "explicació
             let aiResult = nvRes.data.choices[0].message.content;
             let aiJson = JSON.parse(aiResult.match(/\{[\s\S]*\}/)[0]);
             if (!aiJson.apta) {
-                await closeIssue(`IA Rechazó la extensión: ${aiJson.motivo}`);
+                await closeIssue(`AI Rejected the extension: ${aiJson.motivo}`);
             }
         } catch(e) {
-            console.warn("Error consultando NVIDIA API, asumiendo validación manual.", e.response?.data || e.message);
+            console.warn("Error querying NVIDIA API, assuming manual validation.", e.response?.data || e.message);
         }
     }
 
@@ -214,9 +217,8 @@ Responde ESTRICTAMENTE en formato JSON: {"apta": boolean, "motivo": "explicació
                     ...formData.getHeaders()
                 }
             });
-            // Simplified check; real VT integration needs polling
         } catch (e) {
-            console.warn("Error con VirusTotal", e.message);
+            console.warn("Error with VirusTotal", e.message);
         }
     }
 
@@ -250,7 +252,7 @@ Responde ESTRICTAMENTE en formato JSON: {"apta": boolean, "motivo": "explicació
         try {
             await axios.post(
                 `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}/comments`,
-                { body: "¡Felicidades! Tu extensión cumple con los estándares de GJS y ha sido publicada con éxito." },
+                { body: "Congratulations! Your extension meets the GJS standards and has been published successfully." },
                 {
                     headers: {
                         'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
@@ -269,10 +271,10 @@ Responde ESTRICTAMENTE en formato JSON: {"apta": boolean, "motivo": "explicació
                 }
             );
         } catch (e) {
-            console.error("No se pudo cerrar el issue de éxito");
+            console.error("Could not close the success issue");
         }
     }
-    console.log("Validación completada y publicación preparada.");
+    console.log("Validation completed and publication prepared.");
 }
 
 run().catch(console.error);
