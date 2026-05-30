@@ -234,8 +234,9 @@ async function run() {
         }
     }
 
-    if (codeText.length > 50000) {
-        await failAudit('ai', "Code too large for automatic audit (max 50,000 chars).");
+    if (codeText.length > 100000) {
+        const estimatedTokens = Math.ceil(codeText.length / 4);
+        await failAudit('ai', `Code too large for automatic audit (${codeText.length} chars, ~${estimatedTokens} tokens). Limit is 100,000 chars.`);
     }
 
     let gjsContext = '';
