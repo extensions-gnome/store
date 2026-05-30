@@ -5,6 +5,7 @@
     "name": "Test Extension",
     "description": "This is a test extension.",
     "github_url": "https://github.com/test/test",
+    "github_user": "admin",
     "icon": "assets/icons/test-ext@example.com.png",
     "demos": [
       "assets/demos/test-ext@example.com/demo1.png"
@@ -18,6 +19,7 @@
     "description": "Show AI provider usage metrics in the GNOME panel. Based on codexbar by @steipete.\n\nNow support additional providers:\n- Claude\n- Codex\n- Gemini\n- more!",
     "github_url": "https://github.com/InledGroup/codexbar-gnome",
     "promo_url": "https://inled.es/apps/codexbar-gnome",
+    "github_user": "inled",
     "icon": "assets/icons/codexbar@inled.es.png",
     "demos": [
       "assets/demos/codexbar@inled.es/demo1.png"
