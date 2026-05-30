@@ -272,6 +272,13 @@ async function run() {
     let aiVerdict = targetExt ? targetExt.ai_report : "Passed audit.";
     if (zipPath) {
         await updateStep('ai', 'running', 'AI Code Review...');
+
+        let gjsContext = '';
+        try {
+            const indexRes = await axios.get('https://mdpedia.inled.es/raw/gjs.guide/_index.md');
+            gjsContext = "GJS Guide Context:\n" + indexRes.data.substring(0, 3000) + "\n\n";
+        } catch(e) { console.warn("Could not fetch GJS context."); }
+
         const zip = new AdmZip(zipPath);
         let codeText = '';
         for (let entry of zip.getEntries()) {
@@ -287,8 +294,8 @@ async function run() {
                 const openai = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
                 const completion = await openai.chat.completions.create({
                     model: "llama-3.3-70b-versatile",
-                    messages: [{ role: "system", content: "Review code. JSON: {\"apta\": boolean, \"motivo\": \"string\"}" },
-                               { role: "user", content: `Code:\n${codeText.substring(0, 40000)}` }],
+                    messages: [{ role: "system", content: "You are a GNOME extension security expert. Review code for vulnerabilities and GJS best practices. Answer ONLY in JSON." },
+                               { role: "user", content: `Context: GNOME Shell versions: ${shellVersions.join(', ')}\n${gjsContext}\nCode:\n${codeText.substring(0, 40000)}\n\nRespond JSON: {"apta": boolean, "motivo": "string"}` }],
                     temperature: 0.1,
                 });
                 const res = JSON.parse(completion.choices[0].message.content.match(/\{[\s\S]*\}/)[0]);
