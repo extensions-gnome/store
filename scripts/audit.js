@@ -333,6 +333,7 @@ async function run() {
     const finalExt = {
         uuid,
         version: metadata ? (metadata.version || 1) : (targetExt ? targetExt.version : 1),
+        shell_version: metadata ? (metadata['shell-version'] || []) : (targetExt ? targetExt.shell_version : []),
         name: formData.name || (targetExt ? targetExt.name : uuid),
         description: formData.description || (targetExt ? targetExt.description : ''),
         github_url: formData.github_url || (targetExt ? targetExt.github_url : ''),
