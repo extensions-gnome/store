@@ -2,12 +2,12 @@ name: "Validate and Publish Extension"
 
 on:
   issues:
-    types: [opened, edited, labeled]
+    types: [opened, edited]
 
 jobs:
   validate:
-    # This ensures it runs if the label is present, regardless of which event triggered it
-    if: github.event.label.name == 'nueva-extension' || contains(github.event.issue.labels.*.name, 'nueva-extension')
+    # Trigger based on the title prefix defined in the issue template
+    if: startsWith(github.event.issue.title, '[Extension]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
