@@ -1,12 +1,13 @@
-name: "Validar y Publicar Extensión"
+name: "Validate and Publish Extension"
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened, edited, labeled]
 
 jobs:
   validate:
-    if: contains(github.event.issue.labels.*.name, 'nueva-extension')
+    # This ensures it runs if the label is present, regardless of which event triggered it
+    if: github.event.label.name == 'nueva-extension' || contains(github.event.issue.labels.*.name, 'nueva-extension')
     runs-on: ubuntu-latest
     permissions:
       contents: write
