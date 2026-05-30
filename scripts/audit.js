@@ -35,8 +35,6 @@ async function postOrUpdateComment(message) {
     }
 }
 
-const loadingIcon = "![loading](https://raw.githubusercontent.com/nelson-liu/animated-gifs/master/loading.gif)"; // Small discrete loading gif if available, or just use text
-
 function getStatusMarkdown(steps) {
     let md = "### 🛡️ GNOME Beta Store - Audit Progress\n\n";
     for (const step of steps) {
@@ -66,6 +64,7 @@ async function updateStep(id, status, message) {
 }
 
 async function downloadFile(url, dest) {
+    console.log(`Downloading: ${url} -> ${dest}`);
     if (url.startsWith('file://')) {
         const filePath = url.replace('file://', '');
         fs.copyFileSync(filePath, dest);
@@ -74,7 +73,10 @@ async function downloadFile(url, dest) {
     const response = await axios({
         url,
         method: 'GET',
-        responseType: 'stream'
+        responseType: 'stream',
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (GNOME Beta Store Bot)'
+        }
     });
     return new Promise((resolve, reject) => {
         const writer = fs.createWriteStream(dest);
@@ -91,24 +93,31 @@ async function downloadFile(url, dest) {
     });
 }
 
-function extractMarkdownLink(text) {
+function extractLink(text) {
     if (!text) return null;
-    const match = text.match(/\]\(([^)]+)\)/);
-    if (match) return match[1];
-    const urlMatch = text.match(/(https?:\/\/[^\s]+)/);
+    // 1. Try Markdown: [text](url)
+    const mdMatch = text.match(/\]\(([^)]+)\)/);
+    if (mdMatch) return mdMatch[1];
+    // 2. Try HTML: <img ... src="url" ... />
+    const htmlMatch = text.match(/src=["']([^"']+)["']/);
+    if (htmlMatch) return htmlMatch[1];
+    // 3. Try raw URL
+    const urlMatch = text.match(/(https?:\/\/[^\s"'<>]+)/);
     if (urlMatch) return urlMatch[1];
     return text.trim();
 }
 
-function extractMarkdownLinks(text) {
+function extractLinks(text) {
     if (!text) return [];
     const links = [];
-    const regex = /\]\(([^)]+)\)|(https?:\/\/[^\s]+)/g;
+    // Combine patterns for global search
+    const regex = /\]\(([^)]+)\)|src=["']([^"']+)["']|(https?:\/\/[^\s"'<>]+)/g;
     let match;
     while ((match = regex.exec(text)) !== null) {
-        links.push(match[1] || match[2]);
+        links.push(match[1] || match[2] || match[3]);
     }
-    return links;
+    // Remove duplicates
+    return [...new Set(links)];
 }
 
 async function failAudit(stepId, message) {
@@ -134,8 +143,6 @@ async function run() {
     await updateStep('prep', 'running', 'Analyzing issue data...');
     
     const issueBody = process.env.ISSUE_BODY || '';
-    const repo = process.env.REPOSITORY || 'owner/repo';
-    
     const sections = issueBody.split('###');
     const data = {};
     for (let section of sections) {
@@ -147,13 +154,14 @@ async function run() {
         if (header.includes('Description')) data.description = content;
         if (header.includes('GitHub Link')) data.github_url = content;
         if (header.includes('Promotional Link')) data.promo_url = content !== '_No response_' ? content : '';
-        if (header.includes('ZIP File')) data.zip_url = extractMarkdownLink(content);
-        if (header.includes('Icon')) data.icon_url = extractMarkdownLink(content);
-        if (header.includes('Demos')) data.demo_urls = extractMarkdownLinks(content);
+        if (header.includes('ZIP File')) data.zip_url = extractLink(content);
+        if (header.includes('Icon')) data.icon_url = extractLink(content);
+        if (header.includes('Demos')) data.demo_urls = extractLinks(content);
     }
 
     if (!data.uuid || !data.zip_url || !data.icon_url) {
-        await failAudit('prep', 'Required fields are missing or file URLs could not be extracted.');
+        console.error("Parsed Data:", data);
+        await failAudit('prep', 'Required fields are missing or file URLs could not be extracted (check if links/tags are valid).');
     }
     await updateStep('prep', 'success', 'Issue data parsed.');
 
@@ -166,14 +174,14 @@ async function run() {
     try {
         await downloadFile(data.zip_url, zipPath);
     } catch (e) {
-        await failAudit('download', `Could not download the ZIP file from ${data.zip_url}.`);
+        await failAudit('download', `Could not download the ZIP file: ${e.message}`);
     }
 
     const iconPath = path.join('assets/icons', `${uuid}.png`);
     try {
         await downloadFile(data.icon_url, iconPath);
     } catch (e) {
-        await failAudit('download', "Could not download the icon.");
+        await failAudit('download', `Could not download the icon: ${e.message}`);
     }
     
     const demosDir = path.join('assets/demos', uuid);
@@ -187,7 +195,7 @@ async function run() {
                 await downloadFile(data.demo_urls[i], dest);
                 demoPaths.push(dest);
             } catch(e) {
-                console.warn(`Could not download demo ${i+1}`);
+                console.warn(`Could not download demo ${i+1}: ${e.message}`);
             }
         }
     }
@@ -251,6 +259,7 @@ async function run() {
                 if (!aiJson.apta) {
                     await failAudit('ai', `AI Rejected: ${aiJson.motivo}`);
                 }
+                process.env.AI_MOTIVO = aiJson.motivo;
             } else {
                 throw new Error("Invalid AI JSON response.");
             }
@@ -294,7 +303,7 @@ async function run() {
         icon: `assets/icons/${uuid}.png`,
         demos: demoPaths,
         zip_url: `https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/${uuid}.zip`,
-        ai_report: aiJson?.motivo || "Passed automated code quality audit.",
+        ai_report: process.env.AI_MOTIVO || "Passed automated code quality audit.",
         security_report: process.env.VT_API_KEY ? "Verified clean by VirusTotal." : "Scanned for common vulnerabilities."
     };
     
