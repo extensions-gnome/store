@@ -1,21 +1,21 @@
-# GNOME Beta Store (Storage & Bot)
+# Community Extensions Store (Storage & Bot)
 
-This repository serves as the backend and database for the [GNOME Beta Store](https://extensions-gnome.github.io). It manages the automated auditing pipeline and stores the extension assets.
+This repository serves as the backend and database for the [Community Extensions Store](https://extensions-gnome.github.io). It manages the automated auditing pipeline and stores the extension assets.
 
 ## Mission Statement
 
-The GNOME Beta Store is a community-driven, unofficial initiative. It was created with a positive intent: to help the GNOME ecosystem grow by providing a fast-track alternative to the official extensions repository.
+The Community Extensions Store is a community-driven, unofficial initiative. It was created with a positive intent: to help the desktop ecosystem grow by providing a fast-track alternative to official extensions repositories.
 
-We recognize that the official review process is often overwhelmed by the high volume of submissions. Our goal is not to replace the official store, but to provide a secure, automated "beta" channel where developers can publish updates and new features instantly.
+We recognize that official review processes are often overwhelmed by the high volume of submissions. Our goal is not to replace official stores, but to provide a secure, automated community channel where developers can publish updates and new features instantly.
 
 ## Security & Transparency
 
 We take security seriously. Every extension published here undergoes:
-1. AI Logic Audit: Powered by Llama-3, checking for GJS best practices and obvious security flaws.
+1. AI Logic Audit: Powered by Llama-3, checking for best practices and obvious security flaws.
 2. Malware Analysis: Full scan via VirusTotal (polling 70+ antivirus engines).
 3. Ownership Verification: Strict GitHub-based authorization to prevent unauthorized updates.
 
-Note: This is an unofficial project. We are not affiliated with the GNOME Foundation.
+Note: This is an unofficial project. We are not affiliated with any official foundation.
 
 ## How to Publish
 
@@ -34,4 +34,4 @@ Available workflows:
 * Database: extensions.json.
 
 ---
-Built for the GNOME Community.
+Built for the community.
