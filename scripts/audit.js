@@ -38,10 +38,18 @@ async function postOrUpdateComment(message) {
 
 function getStatusMarkdown(steps) {
     let md = "### 🛡️ Audit Progress\n\n";
+    let details = "";
     for (const step of steps) {
         const icon = step.status === 'pending' ? '⏳' : (step.status === 'running' ? '🔄' : (step.status === 'success' ? '✅' : '❌'));
-        md += `${icon} **${step.name}**: ${step.message}\n`;
+        const lines = (step.message || '').split('\n');
+        const summary = lines[0];
+        md += `${icon} **${step.name}**: ${summary}\n`;
+        
+        if (lines.length > 1) {
+            details += `\n### 📝 ${step.name} Detailed Report\n\n${lines.slice(1).join('\n')}\n`;
+        }
     }
+    md += details;
     md += "\n---\n*Automated review in progress.*";
     return md;
 }
@@ -381,6 +389,7 @@ Respond ONLY with a JSON object in this format:
                 
                 const res = JSON.parse(completion.choices[0].message.content.match(/\{[\s\S]*\}/)[0]);
                 
+                let aiAuditDone = false;
                 if (res.status === 'reject') {
                     // Reject status: do NOT publish, request human review (leave issue open)
                     const formattedErrors = (res.errors || []).map(e => `- \`${e.file}:${e.line}\` [${e.severity}]: ${e.message}`).join('\n');
@@ -394,16 +403,24 @@ Respond ONLY with a JSON object in this format:
                     
                     // Add label indicating it was flagged
                     await addIssueLabel('audit-flagged');
+                    await updateStep('ai', 'success', `Complete with warnings.\n${aiVerdict}`);
+                    aiAuditDone = true;
                 } else {
                     // OK status
                     aiVerdict = res.motivo || "Passed audit.";
+                    await updateStep('ai', 'success', `Passed (No issues).\n${aiVerdict}`);
+                    aiAuditDone = true;
                 }
             } catch (e) { 
                 console.error("AI Audit exception caught:", e.message);
                 aiVerdict = "Audit bypassed/manual."; 
+                await updateStep('ai', 'success', 'Bypassed due to system error.');
+                aiAuditDone = true;
             }
         }
-        await updateStep('ai', 'success', 'Complete.');
+        if (!aiAuditDone) {
+            await updateStep('ai', 'success', 'Complete.');
+        }
     }
 
     // VIRUSTOTAL
