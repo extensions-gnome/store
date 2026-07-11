@@ -7,6 +7,9 @@ package-lock.json
 # Web Frontend (Separate Repository B)
 gnome-beta-web/
 
+# GNOME Extensions Zipped Binaries
+extensions/
+
 # Local Tests & Mock data
 test/
 /tmp/

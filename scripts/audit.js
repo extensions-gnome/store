@@ -344,9 +344,13 @@ async function run() {
         fs.readdirSync(demosDir).forEach(f => demoPaths.push(path.join(demosDir, f)));
     }
 
+    const version = metadata ? (metadata.version || 1) : (targetExt ? targetExt.version : 1);
+    const repoPath = process.env.REPOSITORY || 'extensions-gnome/store';
+    const releaseTag = `${uuid}-v${version}`;
+
     const finalExt = {
         uuid,
-        version: metadata ? (metadata.version || 1) : (targetExt ? targetExt.version : 1),
+        version,
         shell_version: metadata ? (metadata['shell-version'] || []) : (targetExt ? targetExt.shell_version : []),
         name: formData.name || (targetExt ? targetExt.name : uuid),
         description: formData.description || (targetExt ? targetExt.description : ''),
@@ -355,7 +359,7 @@ async function run() {
         github_user: targetExt ? targetExt.github_user : issueUser,
         icon: `assets/icons/${uuid}.png`,
         demos: demoPaths,
-        zip_url: `https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/${uuid}.zip`,
+        zip_url: `https://github.com/${repoPath}/releases/download/${releaseTag}/${uuid}.zip`,
         ai_report: aiVerdict,
         security_report: vtVerdict
     };
@@ -365,7 +369,37 @@ async function run() {
     else db.push(finalExt);
 
     fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-    if (zipPath) fs.copyFileSync(zipPath, path.join('extensions', `${uuid}.zip`));
+
+    // Upload to GitHub Releases instead of committing to Git
+    if (zipPath && process.env.GITHUB_TOKEN) {
+        console.log(`Uploading ZIP to GitHub Release ${releaseTag}...`);
+        try {
+            const { execSync } = require('child_process');
+            
+            // Rename to standard uuid.zip name for upload
+            const uploadZipPath = path.join(tmpDir, `${uuid}.zip`);
+            fs.copyFileSync(zipPath, uploadZipPath);
+            
+            // Try to create the release, ignore if it already exists
+            try {
+                execSync(`gh release create "${releaseTag}" --title "${finalExt.name} v${version}" --notes "Automated release of ${finalExt.name} version ${version}"`, {
+                    env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
+                    stdio: 'inherit'
+                });
+            } catch (err) {
+                console.log("Release might already exist, proceeding to upload...");
+            }
+            // Upload the asset
+            execSync(`gh release upload "${releaseTag}" "${uploadZipPath}" --clobber`, {
+                env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
+                stdio: 'inherit'
+            });
+            console.log("ZIP successfully uploaded to GitHub Release.");
+        } catch (err) {
+            console.error("Failed to upload ZIP to GitHub Release:", err.message);
+            await failAudit('publish', `Failed to upload ZIP to GitHub Release: ${err.message}`);
+        }
+    }
 
     await updateStep('publish', 'success', 'Done!');
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
