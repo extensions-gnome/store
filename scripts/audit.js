@@ -444,7 +444,11 @@ Respond ONLY with a JSON object in this format:
         fs.readdirSync(demosDir).forEach(f => demoPaths.push(path.join(demosDir, f)));
     }
 
-    const version = metadata ? (metadata.version || 1) : (targetExt ? targetExt.version : 1);
+    // Ensure the version is cumulative (increments automatically on updates if not bumped in metadata)
+    let version = metadata ? (metadata.version || 1) : 1;
+    if (targetExt) {
+        version = Math.max(version, targetExt.version + 1);
+    }
     const repoPath = process.env.REPOSITORY || 'extensions-gnome/store';
     const releaseTag = `${uuid}-v${version}`;
 
