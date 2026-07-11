@@ -2,6 +2,14 @@
   {
     "uuid": "codexbar@inled.es",
     "version": 1,
+    "shell_version": [
+      "45",
+      "46",
+      "47",
+      "48",
+      "49",
+      "50"
+    ],
     "name": "Codexbar",
     "description": "Show AI provider usage metrics in the GNOME panel. Based on codexbar by @steipete.\n\nNow support additional providers:\n- Claude\n- Codex\n- Gemini\n- more!",
     "github_url": "https://github.com/InledGroup/codexbar-gnome",
@@ -11,8 +19,8 @@
     "demos": [
       "assets/demos/codexbar@inled.es/demo1.png"
     ],
-    "zip_url": "https://raw.githubusercontent.com/extensions-gnome/store/main/extensions/codexbar@inled.es.zip",
-    "ai_report": "El código cumple con los estándares de calidad y seguridad para GNOME Shell 45, 46, 47, 48, 49, 50.",
-    "security_report": "Verified clean by VirusTotal."
+    "zip_url": "https://github.com/extensions-gnome/store/releases/download/codexbar@inled.es-v1/codexbar@inled.es.zip",
+    "ai_report": "Flagged Audit Notes:\nThe code has some minor issues and warnings, but no critical security vulnerabilities were found. The issues are related to the use of synchronous DBus/file operations, deprecated APIs, and style issues.\n\nIssues:\n- secret.js:23 [warning]: The Secret.password_store_sync function is a synchronous DBus operation and may block the main thread. Consider using the asynchronous version instead.\n- secret.js:35 [warning]: The Secret.password_lookup_sync function is a synchronous DBus operation and may block the main thread. Consider using the asynchronous version instead.\n- secret.js:47 [warning]: The Secret.password_clear_sync function is a synchronous DBus operation and may block the main thread. Consider using the asynchronous version instead.\n- adapters/SoupApiFetcher.js:123 [warning]: The Soup.Session.timeout property is deprecated since Soup 3.0. Consider using the Soup.Session.timeout-seconds property instead.\n- prefs.js:345 [warning]: The Gio.app_info_launch_default_for_uri function is deprecated since GNOME 43. Consider using the Gio.AppInfo.launch_default_for_uri function instead.",
+    "security_report": "Clean (65 engines)"
   }
 ]
