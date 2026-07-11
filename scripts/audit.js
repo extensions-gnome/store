@@ -111,6 +111,11 @@ function extractLinks(text) {
 }
 
 async function failAudit(stepId, message) {
+    console.error(`\n==================================================`);
+    console.error(`❌ AUDIT FAILED during step: ${stepId}`);
+    console.error(`Reason: ${message}`);
+    console.error(`==================================================\n`);
+
     await updateStep(stepId, 'error', message);
     if (process.env.GITHUB_TOKEN && process.env.REPOSITORY && process.env.ISSUE_NUMBER) {
         try {
