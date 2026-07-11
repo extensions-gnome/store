@@ -387,7 +387,21 @@ Respond ONLY with a JSON object in this format:
                     temperature: 0.1,
                 });
                 
-                const res = JSON.parse(completion.choices[0].message.content.match(/\{[\s\S]*\}/)[0]);
+                const match = completion.choices[0].message.content.match(/\{[\s\S]*\}/);
+                if (!match) {
+                    throw new Error("Response did not contain a valid JSON block.");
+                }
+
+                let res;
+                try {
+                    res = JSON.parse(match[0]);
+                } catch (e) {
+                    throw new Error(`Invalid JSON syntax in AI response: ${e.message}`);
+                }
+
+                if (!res.status || !['ok', 'flag', 'reject'].includes(res.status)) {
+                    throw new Error(`AI response status is missing or invalid (found: "${res.status || 'undefined'}").`);
+                }
                 
                 let aiAuditDone = false;
                 if (res.status === 'reject') {
@@ -412,10 +426,9 @@ Respond ONLY with a JSON object in this format:
                     aiAuditDone = true;
                 }
             } catch (e) { 
-                console.error("AI Audit exception caught:", e.message);
-                aiVerdict = "Audit bypassed/manual."; 
-                await updateStep('ai', 'success', 'Bypassed due to system error.');
-                aiAuditDone = true;
+                console.error("AI Audit failed:", e.message);
+                const errorMsg = `AI Audit execution failed:\n${e.message}\n\n*A human review has been requested automatically.*`;
+                await requestHumanReview('ai', errorMsg);
             }
         }
         if (!aiAuditDone) {
