@@ -278,11 +278,37 @@ async function run() {
     if (zipPath) {
         await updateStep('ai', 'running', 'AI Code Review...');
 
-        let gjsContext = '';
+        let gjsContext = 'GJS & GNOME Shell Review Guidelines Context:\n\n';
+        
+        // 1. Fetch the main Review Guidelines (very important for security & GJS rules)
         try {
-            const indexRes = await axios.get('https://mdpedia.inled.es/raw/gjs.guide/_index.md');
-            gjsContext = "GJS Guide Context:\n" + indexRes.data.substring(0, 3000) + "\n\n";
-        } catch(e) { console.warn("Could not fetch GJS context."); }
+            console.log("Fetching GJS Review Guidelines...");
+            const reviewRes = await axios.get('https://mdpedia.inled.es/raw/gjs.guide/extensions/review-guidelines/review-guidelines.md');
+            gjsContext += "### GNOME Shell Review Guidelines:\n" + reviewRes.data + "\n\n";
+        } catch (e) {
+            console.warn("Could not fetch GJS Review Guidelines:", e.message);
+        }
+
+        // 2. Fetch specific shell version upgrade guides targeted by this extension
+        if (shellVersions && shellVersions.length > 0) {
+            for (const version of shellVersions) {
+                // Extract major version, e.g. "45" from "45.1" or "45"
+                const match = version.match(/^(\d+)/);
+                if (match) {
+                    const majorVer = match[1];
+                    // Only fetch standard supported upgrade guides (GNOME 40+)
+                    if (parseInt(majorVer) >= 40) {
+                        try {
+                            console.log(`Fetching upgrade guide for GNOME Shell ${majorVer}...`);
+                            const upgradeRes = await axios.get(`https://mdpedia.inled.es/raw/gjs.guide/extensions/upgrading/gnome-shell-${majorVer}.md`);
+                            gjsContext += `### GNOME Shell ${majorVer} Upgrade Guide:\n` + upgradeRes.data + "\n\n";
+                        } catch (e) {
+                            // Silently ignore if guide is not found or fails
+                        }
+                    }
+                }
+            }
+        }
 
         const zip = new AdmZip(zipPath);
         let codeText = '';
