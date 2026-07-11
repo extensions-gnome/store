@@ -129,6 +129,30 @@ async function failAudit(stepId, message) {
     process.exit(1);
 }
 
+async function addIssueLabel(label) {
+    if (!process.env.GITHUB_TOKEN || !process.env.REPOSITORY || !process.env.ISSUE_NUMBER) return;
+    try {
+        await axios.post(
+            `https://api.github.com/repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}/labels`,
+            { labels: [label] },
+            { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' } }
+        );
+    } catch(e) {
+        console.error(`Failed to add label ${label}:`, e.message);
+    }
+}
+
+async function requestHumanReview(stepId, message) {
+    console.error(`\n==================================================`);
+    console.error(`❌ AUDIT REJECTED during step: ${stepId}`);
+    console.error(`Reason: ${message}`);
+    console.error(`==================================================\n`);
+
+    await updateStep(stepId, 'error', message);
+    await addIssueLabel('human-review-needed');
+    process.exit(1);
+}
+
 async function run() {
     await updateStep('prep', 'running', 'Analyzing request...');
     
@@ -322,17 +346,62 @@ async function run() {
 
         if (process.env.GROQ_API_KEY) {
             try {
+                const systemPrompt = `You are a GNOME extension security expert. You must review the provided Javascript/TypeScript code of a GNOME Shell extension for security vulnerabilities, compliance with GNOME Shell Extension Review Guidelines, and GJS best practices.
+
+Your response must be in JSON format.
+
+Classify the audit into one of three statuses:
+- "ok": The code is secure, follows guidelines, and has no issues.
+- "flag": The code has no critical security vulnerabilities, but contains minor violations or warnings (e.g. using synchronous DBus/file operations like password_lookup_sync, deprecated APIs, style issues, etc.). It is safe to run but needs improvement.
+- "reject": The code has critical security vulnerabilities (e.g. malware, data theft, credential leakage, executing unvalidated user input via shell, backdoors) or severe bugs that would crash GNOME Shell.
+
+You MUST respond in English. You must specify the filename and line numbers where each error or warning occurs.
+
+Respond ONLY with a JSON object in this format:
+{
+  "status": "ok" | "flag" | "reject",
+  "motivo": "A detailed summary of the overall review in English.",
+  "errors": [
+    {
+      "file": "filename.js",
+      "line": 123,
+      "severity": "warning" | "critical",
+      "message": "Description of the issue in English."
+    }
+  ]
+}
+`;
                 const openai = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
                 const completion = await openai.chat.completions.create({
                     model: "llama-3.3-70b-versatile",
-                    messages: [{ role: "system", content: "You are a GNOME extension security expert. Review code for vulnerabilities and GJS best practices. Answer ONLY in JSON." },
-                               { role: "user", content: `Context: GNOME Shell versions: ${shellVersions.join(', ')}\n${gjsContext}\nCode:\n${codeText.substring(0, 40000)}\n\nRespond JSON: {"apta": boolean, "motivo": "string"}` }],
+                    messages: [{ role: "system", content: systemPrompt },
+                               { role: "user", content: `Context: GNOME Shell versions: ${shellVersions.join(', ')}\n${gjsContext}\nCode:\n${codeText.substring(0, 40000)}` }],
                     temperature: 0.1,
                 });
+                
                 const res = JSON.parse(completion.choices[0].message.content.match(/\{[\s\S]*\}/)[0]);
-                if (!res.apta) await failAudit('ai', `Rejected: ${res.motivo}`);
-                aiVerdict = res.motivo;
-            } catch (e) { aiVerdict = "Audit bypassed/manual."; }
+                
+                if (res.status === 'reject') {
+                    // Reject status: do NOT publish, request human review (leave issue open)
+                    const formattedErrors = (res.errors || []).map(e => `- \`${e.file}:${e.line}\` [${e.severity}]: ${e.message}`).join('\n');
+                    const rejectMsg = `Rejected by AI Audit:\n${res.motivo}\n\n**Critical Issues Found:**\n${formattedErrors}\n\n*A human review has been requested. A maintainer will check this issue manually. Please do not close this issue.*`;
+                    
+                    await requestHumanReview('ai', rejectMsg);
+                } else if (res.status === 'flag') {
+                    // Flag status: publish the extension, but include details in database
+                    const formattedErrors = (res.errors || []).map(e => `- ${e.file}:${e.line} [${e.severity}]: ${e.message}`).join('\n');
+                    aiVerdict = `Flagged Audit Notes:\n${res.motivo}\n\nIssues:\n${formattedErrors}`;
+                    
+                    // Add label indicating it was flagged
+                    await addIssueLabel('audit-flagged');
+                } else {
+                    // OK status
+                    aiVerdict = res.motivo || "Passed audit.";
+                }
+            } catch (e) { 
+                console.error("AI Audit exception caught:", e.message);
+                aiVerdict = "Audit bypassed/manual."; 
+            }
         }
         await updateStep('ai', 'success', 'Complete.');
     }
